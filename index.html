@@ -142,20 +142,6 @@
         }
         .pb-safe { padding-bottom: env(safe-area-inset-bottom, 6px); }
 
-        /* Automatisches Ausblenden von "Powered by Netlify" oder externen Hosting-Bannern */
-        a[href*="netlify.com"],
-        a[href*="netlify.app"][target="_blank"]:not(.allow-link),
-        div[class*="netlify"],
-        div[id*="netlify"],
-        iframe[src*="netlify"] {
-            display: none !important;
-            visibility: hidden !important;
-            opacity: 0 !important;
-            pointer-events: none !important;
-            height: 0 !important;
-            width: 0 !important;
-        }
-
         /* Thermal-Bon Druck-Styling (58mm / 80mm) */
         @media print {
             body * { visibility: hidden !important; }
@@ -175,8 +161,25 @@
             .no-print { display: none !important; }
         }
     </style>
+<style>
+/* Keep navigation above the host badge and device safe area. */
+body { padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+body > nav { bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important; }
+</style>
 </head>
+<style>
+body:not(.staff-authorized) > :not(#secure-login):not(script):not(style) { display: none !important; }
+#secure-login { max-width: 420px; margin: 10vh auto; padding: 24px; background: white; border-radius: 16px; }
+#secure-login input, #secure-login button { display: block; width: 100%; padding: 12px; margin-top: 12px; border: 1px solid #ccc; border-radius: 8px; }
+</style>
 <body class="bg-slate-100 text-gray-800 pb-16 min-h-screen">
+<section id="secure-login" dir="rtl">
+<h1>الاصلي — تسجيل دخول الموظفين</h1>
+<form id="secure-login-form">
+<label for="secure-email">البريد الإلكتروني</label><input id="secure-email" type="email" autocomplete="username" required dir="ltr">
+<label for="secure-password">كلمة المرور</label><input id="secure-password" type="password" autocomplete="current-password" required dir="ltr">
+<button type="submit">تسجيل الدخول</button><p id="secure-login-status" role="status"></p>
+</form></section>
 
     <!-- Garantierter Schnellstart-Ladebildschirm (verschwindet automatisch nach 350ms) -->
     <div id="loading-screen">
@@ -1423,26 +1426,9 @@
 
     <!-- Hybrid Cloud + Offline-First Engine (100% kompatibel mit سوبر ماركت الاصلي) -->
     <script type="module">
+        import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, getIdTokenResult, signOut } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
         import { getDatabase, ref, set, get, update, remove, onValue } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
-
-        // Entfernt automatisch eventuell von Netlify injizierte "Powered by Netlify"-Banner
-        (function removeExternalHostingBanners() {
-            function cleanBanners() {
-                document.querySelectorAll('a[href*="netlify"], div[class*="netlify"], div[id*="netlify"]').forEach(el => {
-                    try { el.remove(); } catch (e) {}
-                });
-                // Prüft fixe Elemente in der unteren Ecke, die nicht zur App gehören
-                document.querySelectorAll('body > div, body > a, body > iframe').forEach(el => {
-                    const id = el.id || '';
-                    if (!id && (el.innerText || '').toLowerCase().includes('netlify')) {
-                        try { el.remove(); } catch (e) {}
-                    }
-                });
-            }
-            cleanBanners();
-            setInterval(cleanBanners, 1500);
-        })();
 
         // ==========================================================
         // 1. KONFIGURATION, VERSIONIERUNG & DATENSTRUKTUR (OHNE DATENVERLUST BEI UPDATES)
@@ -1459,386 +1445,15 @@
         const VERSION_HISTORY_KEY = "alasly_pos_version_safe_snapshot";
         const STAFF_KEY = "alasly_pos_staff_name_v1";
         const PIN = "1995";
-        let isLoggedIn = true; // Sofort einsatzbereit zum Eintragen & Testen (kann jederzeit über 🔒 gesperrt werden)
+        let isLoggedIn = false; // UI-Sperre; ersetzt keine serverseitige Authentifizierung.
         let cloudConnected = false;
         let db = null;
         let currentStaff = localStorage.getItem(STAFF_KEY) || "الإدارة";
 
         // Die 18 Einträge aus dem handgeschriebenen Abrechnungsblatt (image_1d418b.jpg)
-        const INITIAL_SHEET_ENTRIES = [
-            { row: 1,  name: "صافي",             amount: 59165,  type: "supplier", item: "رصيد كشف حساب (رقم 1)" },
-            { row: 2,  name: "تجارة عامة",       amount: 8820,   type: "supplier", item: "بضاعة تجارة عامة (رقم 2)" },
-            { row: 3,  name: "ابو وجيه",         amount: 14940,  type: "supplier", item: "رصيد كشف حساب (رقم 3)" },
-            { row: 4,  name: "بيبسي",            amount: 1750,   type: "supplier", item: "مشتريات بيبسي (رقم 4)" },
-            { row: 5,  name: "بوظة",             amount: 18500,  type: "supplier", item: "مشتريات بوظة (رقم 5)" },
-            { row: 6,  name: "ابو عادل حمص",     amount: 2850,   type: "supplier", item: "مشتريات حمص (رقم 6)" },
-            { row: 7,  name: "ألبان غيث (اعلان قيث)", amount: 900, type: "supplier", item: "رصيد كشف حساب (رقم 7)" },
-            { row: 8,  name: "حلو",              amount: 7500,   type: "supplier", item: "مشتريات حلو (رقم 8)" },
-            { row: 9,  name: "ابو سماعيل شبس",   amount: 10740,  type: "supplier", item: "مشتريات شبس (رقم 9)" },
-            { row: 10, name: "سماعات",           amount: 10000,  type: "supplier", item: "مشتريات سماعات (رقم 10)" },
-            { row: 11, name: "لبن",              amount: 1800,   type: "supplier", item: "مشتريات لبن (رقم 11)" },
-            { row: 12, name: "ابو شريف",         amount: 7000,   type: "customer", item: "رصيد كشف حساب (رقم 12)" },
-            { row: 13, name: "شكري",             amount: 4000,   type: "customer", item: "رصيد كشف حساب (رقم 13)" },
-            { row: 14, name: "ابو عبدو خضر",     amount: 12970,  type: "supplier", item: "مشتريات خضار (رقم 14)" },
-            { row: 15, name: "خليل الصايل",      amount: 140250, type: "customer", item: "رصيد كشف حساب (رقم 15)" },
-            { row: 16, name: "صائب الصايل",      amount: 126580, type: "customer", item: "رصيد كشف حساب (رقم 16)" },
-            { row: 17, name: "عبودي الفرصدي",    amount: 44670,  type: "customer", item: "رصيد كشف حساب (رقم 17)" },
-            { row: 18, name: "ابو عدنان",        amount: 170000, type: "customer", item: "رصيد كشف حساب (رقم 18)" }
-        ];
-
-        const INITIAL_PRODUCTS = [
-            { id: "id_mvwkbu66_fbmvt", barcode: "8692365595783", cost: 35,  name: "ثوم علب",      preis: 45 },
-            { id: "id_mvwqotwz_h33zl", barcode: "3540016609585", cost: 200, name: "فحم الدبدوب",  preis: 220 },
-            { id: "id_mvwsq6ot_s6lok", barcode: "8681438430328", cost: 50,  name: "فلافل حنيف",   preis: 65 },
-            { id: "id_mvwsr2ez_iu72e", barcode: "8681438430175", cost: 85,  name: "زعتر حنيف",    preis: 95 },
-            { id: "prod_alban",        barcode: "6281008",       cost: 80,  name: "ألبان غيث",    preis: 100 },
-            { id: "prod_bouza",        barcode: "6281002",       cost: 75,  name: "بوظة",         preis: 100 },
-            { id: "prod_chips",        barcode: "6281005",       cost: 35,  name: "شبس",          preis: 50 },
-            { id: "prod_helou",        barcode: "6281004",       cost: 110, name: "حلو",          preis: 150 },
-            { id: "prod_hummus",       barcode: "6281003",       cost: 55,  name: "حمص",          preis: 75 },
-            { id: "prod_khudar",       barcode: "6281007",       cost: 90,  name: "خضار",         preis: 120 },
-            { id: "prod_laban",        barcode: "6281006",       cost: 70,  name: "لبن",          preis: 90 },
-            { id: "prod_pepsi",        barcode: "6281001",       cost: 35,  name: "بيبسي",        preis: 50 },
-            { id: "prod_samaat",       barcode: "6281010",       cost: 350, name: "سماعات",       preis: 500 },
-            { id: "prod_tijara",       barcode: "6281009",       cost: 150, name: "تجارة عامة",   preis: 200 }
-        ];
-
-        // Integriertes Voll-Backup (Stand: Alasly_Pro_Backup_2026-11-01) für direkten Netlify-Upload
-        const LATEST_INTEGRATED_BACKUP = {
-            produkte: INITIAL_PRODUCTS,
-            kunden: [
-                "ألبان غيث (اعلان قيث)", "ا", "ابو الوليد خردوات", "ابو بكري خردوات", "ابو رضوان اكلات",
-                "ابو سماعيل شبس", "ابو شريف", "ابو عادل حمص", "ابو عبدو خضر", "ابو عدنان",
-                "ابو عدنان كركر", "ابو وجيه", "ابو وجيه شركت درغام", "احمد العواد", "العايد",
-                "ايمن العيد", "بشار العايد", "بوظة", "بيبسي", "بيض 🐓🐓",
-                "تجارة عامة", "تجارة عامة ابو زهير", "حلو", "خليل الصايل", "خليل الصايل ابو جهاد",
-                "زين ابو علي", "سامي الصالح", "سماعات", "سومر ابو اليث", "شركت صباهي بشير",
-                "شكري", "صائب الصايل", "صافي", "صالح ابو عمر", "عامر الحمو",
-                "عبد السواس", "عبودي الزهدي 🍅🥒", "عبودي الفرصدي", "عدنان ابو صدام", "عمران",
-                "عمي ابو حسين", "لبن", "لبن العجمي", "محمد الركة", "محمود هنداوي",
-                "هاني  الصايل ابو قيصر", "ياسر البمانع", "ياسر...", "علاء ابو يزن", "لبن ابو التيم",
-                "خضرة........ 🍅", "محمد الطيف"
-            ],
-            merchantsMeta: {
-                "ألبان غيث (اعلان قيث)": { type: "supplier", phone: "" },
-                "ا": { type: "customer", phone: "" },
-                "ابو الوليد خردوات": { type: "supplier", phone: "" },
-                "ابو بكري خردوات": { type: "supplier", phone: "" },
-                "ابو رضوان اكلات": { type: "supplier", phone: "" },
-                "ابو سماعيل شبس": { type: "supplier", phone: "" },
-                "ابو شريف": { type: "supplier", phone: "" },
-                "ابو عادل حمص": { type: "supplier", phone: "" },
-                "ابو عبدو خضر": { type: "supplier", phone: "" },
-                "ابو عدنان": { type: "customer", phone: "" },
-                "ابو عدنان كركر": { type: "supplier", phone: "" },
-                "ابو وجيه": { type: "supplier", phone: "" },
-                "ابو وجيه شركت درغام": { type: "supplier", phone: "" },
-                "احمد العواد": { type: "customer", phone: "" },
-                "العايد": { type: "customer", phone: "" },
-                "ايمن العيد": { type: "customer", phone: "" },
-                "بشار العايد": { type: "customer", phone: "" },
-                "بوظة": { type: "supplier", phone: "" },
-                "بيبسي": { type: "supplier", phone: "" },
-                "بيض 🐓🐓": { type: "supplier", phone: "" },
-                "تجارة عامة": { type: "supplier", phone: "" },
-                "تجارة عامة ابو زهير": { type: "supplier", phone: "" },
-                "حلو": { type: "supplier", phone: "" },
-                "خليل الصايل": { type: "customer", phone: "" },
-                "خليل الصايل ابو جهاد": { type: "supplier", phone: "" },
-                "زين ابو علي": { type: "customer", phone: "" },
-                "سامي الصالح": { type: "customer", phone: "" },
-                "سماعات": { type: "supplier", phone: "" },
-                "سومر ابو اليث": { type: "customer", phone: "" },
-                "شركت صباهي بشير": { type: "supplier", phone: "" },
-                "شكري": { type: "supplier", phone: "" },
-                "صائب الصايل": { type: "customer", phone: "" },
-                "صافي": { type: "supplier", phone: "" },
-                "صالح ابو عمر": { type: "customer", phone: "" },
-                "عامر الحمو": { type: "customer", phone: "" },
-                "عبد السواس": { type: "customer", phone: "" },
-                "عبودي الزهدي 🍅🥒": { type: "supplier", phone: "00905368107907" },
-                "عبودي الفرصدي": { type: "customer", phone: "" },
-                "عدنان ابو صدام": { type: "customer", phone: "" },
-                "عمران": { type: "customer", phone: "" },
-                "عمي ابو حسين": { type: "customer", phone: "" },
-                "لبن": { type: "supplier", phone: "" },
-                "لبن العجمي": { type: "supplier", phone: "" },
-                "محمد الركة": { type: "customer", phone: "" },
-                "محمود هنداوي": { type: "customer", phone: "" },
-                "هاني  الصايل ابو قيصر": { type: "customer", phone: "" },
-                "ياسر البمانع": { type: "supplier", phone: "" },
-                "ياسر...": { type: "customer", phone: "" },
-                "خضرة........ 🍅": { type: "supplier", phone: "" },
-                "لبن ابو التيم": { type: "supplier", phone: "" },
-                "علاء ابو يزن": { type: "customer", phone: "" },
-                "محمد الطيف": { type: "customer", phone: "" }
-            },
-            buchungen: {
-                "ألبان غيث (اعلان قيث)": {
-                    "sheet_row_7": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 7)", preis: 900, von: "الدفتر الورقي" }
-                },
-                "ا": {
-                    "id_mvwgpeje_03pxg": { datum: "٣١ أكتوبر ٠٤:٥٣ م", name: "➕ قيد دين إضافي", preis: 3165, von: "الإدارة" },
-                    "id_mvwgre3h_f65ks": { datum: "٣١ أكتوبر ٠٤:٥٥ م", name: "💵 دفعة مسددة", preis: -2065, von: "الإدارة" },
-                    "id_mvwrfyw5_w0ujv": { datum: "٣١ أكتوبر ٠٩:٥٤ م", name: "💵 دفعة مسددة", preis: -14940, von: "الإدارة" },
-                    "id_mvwukdb7_1ulja": { datum: "٣١ أكتوبر ١١:٢١ م", name: "💵 دفعة مسددة", preis: -2000, von: "الإدارة" },
-                    "id_mvwuplyt_ut5wk": { datum: "٣١ أكتوبر ١١:٢٦ م", name: "💵 دفعة مسددة", preis: -44670, von: "الإدارة" },
-                    "id_mvwuydb8_bxz20": { datum: "٣١ أكتوبر ١١:٣٢ م", name: "💵 دفعة مسددة", preis: -185745, von: "الإدارة" },
-                    "sheet_row_1": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 1)", preis: 59165, von: "الدفتر الورقي" },
-                    "sheet_row_16": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 16)", preis: 126580, von: "الدفتر الورقي" },
-                    "sheet_row_17": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 17)", preis: 44670, von: "الدفتر الورقي" },
-                    "sheet_row_3": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 3)", preis: 14940, von: "الدفتر الورقي" },
-                    "sheet_row_7": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 7)", preis: 900, von: "الدفتر الورقي" }
-                },
-                "ابو الوليد خردوات": {
-                    "id_mvwuhxzk_ge7td": { datum: "٣١ أكتوبر ١١:٢٠ م", name: "💵 دفعة مسددة", preis: -3820, von: "الإدارة" },
-                    "sheet_row_2": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "بضاعة تجارة عامة (رقم 2)", preis: 8820, von: "الدفتر الورقي" }
-                },
-                "ابو بكري خردوات": {
-                    "id_mvwgy1e1_hvmcv": { datum: "٣١ أكتوبر ٠٥:٠٠ م", name: "💵 دفعة مسددة", preis: -6000, von: "الإدارة" },
-                    "id_mvwksbn8_3a8qx": { datum: "٣١ أكتوبر ٠٦:٤٨ م", name: "💵 دفعة مسددة", preis: -164000, von: "الإدارة" },
-                    "id_mvwkspn9_9xxir": { datum: "٣١ أكتوبر ٠٦:٤٨ م", name: "➕ قيد دين إضافي", preis: 11000, von: "الإدارة" },
-                    "id_mvwuivvm_h6vqw": { datum: "٣١ أكتوبر ١١:٢٠ م", name: "💵 دفعة مسددة", preis: -3300, von: "الإدارة" },
-                    "sheet_row_18": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 18)", preis: 170000, von: "الدفتر الورقي" }
-                },
-                "ابو رضوان اكلات": {
-                    "id_mvwr62g4_nq5d6": { datum: "٣١ أكتوبر ٠٩:٤٦ م", name: "💵 دفعة مسددة", preis: -1100, von: "الإدارة" },
-                    "id_mvwr6g06_3shc7": { datum: "٣١ أكتوبر ٠٩:٤٧ م", name: "➕ قيد دين إضافي", preis: 2200, von: "الإدارة" },
-                    "sheet_row_7": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 7)", preis: 900, von: "الدفتر الورقي" }
-                },
-                "ابو سماعيل شبس": {
-                    "id_mvwlykpp_q5oo5": { datum: "٣١ أكتوبر ٠٧:٢١ م", name: "💵 دفعة مسددة", preis: -5000, von: "الإدارة" },
-                    "sheet_row_9": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "مشتريات شبس (رقم 9)", preis: 10740, von: "الدفتر الورقي" }
-                },
-                "ابو شريف": {
-                    "sheet_row_12": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 12)", preis: 7000, von: "الدفتر الورقي" }
-                },
-                "ابو عادل حمص": {
-                    "id_mvwml1b4_i0h7k": { datum: "٣١ أكتوبر ٠٧:٣٨ م", name: "💵 دفعة مسددة", preis: -350, von: "الإدارة" },
-                    "sheet_row_6": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "مشتريات حمص (رقم 6)", preis: 2850, von: "الدفتر الورقي" }
-                },
-                "ابو عبدو خضر": {
-                    "id_mvwmgi34_3ud48": { datum: "٣١ أكتوبر ٠٧:٣٥ م", name: "💵 دفعة مسددة", preis: -2950, von: "الإدارة" },
-                    "id_mvwmgw8a_r81is": { datum: "٣١ أكتوبر ٠٧:٣٥ م", name: "💵 دفعة مسددة", preis: -20, von: "الإدارة" },
-                    "sheet_row_14": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "مشتريات خضار (رقم 14)", preis: 12970, von: "الدفتر الورقي" }
-                },
-                "ابو عدنان": {
-                    "sheet_row_18": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 18)", preis: 170000, von: "الدفتر الورقي" }
-                },
-                "ابو عدنان كركر": {
-                    "id_mvwr7vpg_5dcos": { datum: "٣١ أكتوبر ٠٩:٤٨ م", name: "💵 دفعة مسددة", preis: -6000, von: "الإدارة" },
-                    "id_mvwre0k9_5zgdn": { datum: "٣١ أكتوبر ٠٩:٥٣ م", name: "💵 دفعة مسددة", preis: -164000, von: "الإدارة" },
-                    "id_mvwre9od_vxi97": { datum: "٣١ أكتوبر ٠٩:٥٣ م", name: "➕ قيد دين إضافي", preis: 11000, von: "الإدارة" },
-                    "sheet_row_18": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 18)", preis: 170000, von: "الدفتر الورقي" }
-                },
-                "ابو وجيه": {
-                    "sheet_row_3": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 3)", preis: 14940, von: "الدفتر الورقي" }
-                },
-                "ابو وجيه شركت درغام": {
-                    "id_mvwifkyb_eidih": { datum: "٣١ أكتوبر ٠٥:٤٢ م", name: "💵 دفعة مسددة", preis: -9000, von: "الإدارة" },
-                    "id_mvwifwna_tknkw": { datum: "٣١ أكتوبر ٠٥:٤٢ م", name: "💵 دفعة مسددة", preis: -5940, von: "الإدارة" },
-                    "sheet_row_3": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 3)", preis: 14940, von: "الدفتر الورقي" }
-                },
-                "بوظة": {
-                    "sheet_row_5": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "مشتريات بوظة (رقم 5)", preis: 18500, von: "الدفتر الورقي" }
-                },
-                "بيبسي": {
-                    "sheet_row_4": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "مشتريات بيبسي (رقم 4)", preis: 1750, von: "الدفتر الورقي" }
-                },
-                "بيض 🐓🐓": {
-                    "sheet_row_4": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "مشتريات بيبسي (رقم 4)", preis: 1750, von: "الدفتر الورقي" }
-                },
-                "تجارة عامة": {
-                    "sheet_row_2": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "بضاعة تجارة عامة (رقم 2)", preis: 8820, von: "الدفتر الورقي" }
-                },
-                "تجارة عامة ابو زهير": {
-                    "id_mvwmm3ez_61uja": { datum: "٣١ أكتوبر ٠٧:٣٩ م", name: "➕ قيد دين إضافي", preis: 10645, von: "الإدارة" },
-                    "id_mvwmodi4_nsk83": { datum: "٣١ أكتوبر ٠٧:٤١ م", name: "💵 دفعة مسددة", preis: -5645, von: "الإدارة" },
-                    "id_mvwmp174_adyxb": { datum: "٣١ أكتوبر ٠٧:٤١ م", name: "💵 دفعة مسددة", preis: -70, von: "الإدارة" },
-                    "id_mvwmr9ci_yi303": { datum: "٣١ أكتوبر ٠٧:٤٣ م", name: "💵 دفعة مسددة", preis: -350, von: "الإدارة" },
-                    "id_mvwmrzel_bduhe": { datum: "٣١ أكتوبر ٠٧:٤٣ م", name: "➕ قيد دين إضافي", preis: 600, von: "الإدارة" },
-                    "sheet_row_2": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "بضاعة تجارة عامة (رقم 2)", preis: 8820, von: "الدفتر الورقي" }
-                },
-                "حلو": {
-                    "sheet_row_8": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "مشتريات حلو (رقم 8)", preis: 7500, von: "الدفتر الورقي" }
-                },
-                "خليل الصايل": {
-                    "sheet_row_15": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 15)", preis: 140250, von: "الدفتر الورقي" }
-                },
-                "خليل الصايل ابو جهاد": {
-                    "id_mvwmt2ug_t81yh": { datum: "٣١ أكتوبر ٠٧:٤٤ م", name: "➕ قيد دين إضافي", preis: 6500, von: "الإدارة" },
-                    "id_mvwmu5k0_y3mlq": { datum: "٣١ أكتوبر ٠٧:٤٥ م", name: "➕ قيد دين إضافي", preis: 24555, von: "الإدارة" },
-                    "id_mvwmunqx_ro9sa": { datum: "٣١ أكتوبر ٠٧:٤٦ م", name: "💵 دفعة مسددة", preis: -18000, von: "الإدارة" },
-                    "sheet_row_15": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 15)", preis: 140250, von: "الدفتر الورقي" }
-                },
-                "سماعات": {
-                    "sheet_row_10": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "مشتريات سماعات (رقم 10)", preis: 10000, von: "الدفتر الورقي" }
-                },
-                "شركت صباهي بشير": {
-                    "id_mvwusglz_m97v8": { datum: "٣١ أكتوبر ١١:٢٨ م", name: "💵 دفعة مسددة", preis: -59165, von: "الإدارة" },
-                    "sheet_row_1": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 1)", preis: 59165, von: "الدفتر الورقي" },
-                    "id_mvwvjbp2_6e6x5": { name: "➕ قيد دين إضافي", preis: 59165, datum: "٣١ أكتوبر ١١:٤٩ م", von: "الإدارة" }
-                },
-                "شكري": {
-                    "sheet_row_13": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 13)", preis: 4000, von: "الدفتر الورقي" }
-                },
-                "صائب الصايل": {
-                    "sheet_row_16": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 16)", preis: 126580, von: "الدفتر الورقي" }
-                },
-                "صافي": {
-                    "sheet_row_1": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 1)", preis: 59165, von: "الدفتر الورقي" }
-                },
-                "عبودي الزهدي 🍅🥒": {
-                    "sheet_row_17": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 17)", preis: 44670, von: "الدفتر الورقي" },
-                    "id_mvxrozkg_tm89f": { name: "💵 دفعة مسددة: لبن حمص جبنة دهن خبز......", preis: -975, datum: "١ نوفمبر ٠٢:٤٩ م", von: "الإدارة" }
-                },
-                "عبودي الفرصدي": {
-                    "sheet_row_17": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 17)", preis: 44670, von: "الدفتر الورقي" }
-                },
-                "عمي ابو حسين": {
-                    "id_mvwu8j94_3ki1t": { datum: "٣١ أكتوبر ١١:١٢ م", name: "➕ قيد دين إضافي", preis: 3650, von: "الإدارة" },
-                    "id_mvwu8yvw_tm55w": { datum: "٣١ أكتوبر ١١:١٣ م", name: "💵 دفعة مسددة", preis: -1000, von: "الإدارة" }
-                },
-                "لبن": {
-                    "sheet_row_11": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "مشتريات لبن (رقم 11)", preis: 1800, von: "الدفتر الورقي" }
-                },
-                "لبن العجمي": {
-                    "id_mvwrsdln_ylsj9": { datum: "٣١ أكتوبر ١٠:٠٤ م", name: "💵 دفعة مسددة", preis: -140250, von: "الإدارة" },
-                    "sheet_row_15": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 15)", preis: 140250, von: "الدفتر الورقي" },
-                    "id_mvwvmlfy_idzx6": { name: "➕ قيد دين إضافي", preis: 2800, datum: "٣١ أكتوبر ١١:٥١ م", von: "الإدارة" }
-                },
-                "هاني  الصايل ابو قيصر": {
-                    "sheet_row_16": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 16)", preis: 126580, von: "الدفتر الورقي" },
-                    "id_mvxstw32_y2y21": { name: "💵 دفعة مسددة", preis: -10000, datum: "١ نوفمبر ٠٣:٢١ م", von: "الإدارة" }
-                },
-                "خضرة........ 🍅": {
-                    "id_mvwgpeje_03pxg": { datum: "٣١ أكتوبر ٠٤:٥٣ م", name: "➕ قيد دين إضافي", preis: 3165, von: "الإدارة" },
-                    "id_mvwgre3h_f65ks": { datum: "٣١ أكتوبر ٠٤:٥٥ م", name: "💵 دفعة مسددة", preis: -2065, von: "الإدارة" },
-                    "id_mvwrfyw5_w0ujv": { datum: "٣١ أكتوبر ٠٩:٥٤ م", name: "💵 دفعة مسددة", preis: -14940, von: "الإدارة" },
-                    "id_mvwukdb7_1ulja": { datum: "٣١ أكتوبر ١١:٢١ م", name: "💵 دفعة مسددة", preis: -2000, von: "الإدارة" },
-                    "id_mvwuplyt_ut5wk": { datum: "٣١ أكتوبر ١١:٢٦ م", name: "💵 دفعة مسددة", preis: -44670, von: "الإدارة" },
-                    "id_mvwuydb8_bxz20": { datum: "٣١ أكتوبر ١١:٣٢ م", name: "💵 دفعة مسددة", preis: -185745, von: "الإدارة" },
-                    "sheet_row_16": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 16)", preis: 126580, von: "الدفتر الورقي" },
-                    "sheet_row_17": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 17)", preis: 44670, von: "الدفتر الورقي" },
-                    "sheet_row_3": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 3)", preis: 14940, von: "الدفتر الورقي" },
-                    "sheet_row_7": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 7)", preis: 900, von: "الدفتر الورقي" },
-                    "id_mvwv77pn_fnvo5": { name: "➕ قيد دين إضافي", preis: 6670, datum: "٣١ أكتوبر ١١:٣٩ م", von: "الإدارة" },
-                    "id_mvwv9pdz_o15c3": { name: "💵 دفعة مسددة", preis: -52495, datum: "٣١ أكتوبر ١١:٤١ م", von: "الإدارة" },
-                    "id_mvwva6u0_40toz": { name: "💵 دفعة مسددة", preis: -104990, datum: "٣١ أكتوبر ١١:٤٢ م", von: "الإدارة" },
-                    "id_mvwvf8gl_oh4q2": { name: "➕ قيد دين إضافي", preis: 209980, datum: "٣١ أكتوبر ١١:٤٥ م", von: "الإدارة" },
-                    "id_mvwvfi6l_mh3j0": { name: "➕ قيد دين إضافي", preis: 6670, datum: "٣١ أكتوبر ١١:٤٦ م", von: "الإدارة" }
-                },
-                "لبن ابو التيم": {
-                    "sheet_row_11": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "مشتريات لبن (رقم 11)", preis: 1800, von: "الدفتر الورقي" },
-                    "id_mvwv8n4u_juvd5": { name: "➕ قيد دين إضافي", preis: 168, datum: "٣١ أكتوبر ١١:٤٠ م", von: "الإدارة" }
-                },
-                "زين ابو علي": {
-                    "id_mvwgpeje_03pxg": { datum: "٣١ أكتوبر ٠٤:٥٣ م", name: "➕ قيد دين إضافي", preis: 3165, von: "الإدارة" },
-                    "id_mvwgre3h_f65ks": { datum: "٣١ أكتوبر ٠٤:٥٥ م", name: "💵 دفعة مسددة", preis: -2065, von: "الإدارة" },
-                    "id_mvwrfyw5_w0ujv": { datum: "٣١ أكتوبر ٠٩:٥٤ م", name: "💵 دفعة مسددة", preis: -14940, von: "الإدارة" },
-                    "id_mvwukdb7_1ulja": { datum: "٣١ أكتوبر ١١:٢١ م", name: "💵 دفعة مسددة", preis: -2000, von: "الإدارة" },
-                    "id_mvwuplyt_ut5wk": { datum: "٣١ أكتوبر ١١:٢٦ م", name: "💵 دفعة مسددة", preis: -44670, von: "الإدارة" },
-                    "id_mvwuydb8_bxz20": { datum: "٣١ أكتوبر ١١:٣٢ م", name: "💵 دفعة مسددة", preis: -185745, von: "الإدارة" },
-                    "sheet_row_1": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 1)", preis: 59165, von: "الدفتر الورقي" },
-                    "sheet_row_16": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 16)", preis: 126580, von: "الدفتر الورقي" },
-                    "sheet_row_17": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 17)", preis: 44670, von: "الدفتر الورقي" },
-                    "sheet_row_3": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 3)", preis: 14940, von: "الدفتر الورقي" },
-                    "sheet_row_7": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 7)", preis: 900, von: "الدفتر الورقي" },
-                    "id_mvwvtvgp_0li1u": { name: "➕ قيد دين إضافي", preis: 61600, datum: "٣١ أكتوبر ١١:٥٧ م", von: "الإدارة" }
-                },
-                "علاء ابو يزن": {
-                    "id_mvwgpeje_03pxg": { datum: "٣١ أكتوبر ٠٤:٥٣ م", name: "➕ قيد دين إضافي", preis: 3165, von: "الإدارة" },
-                    "id_mvwgre3h_f65ks": { datum: "٣١ أكتوبر ٠٤:٥٥ م", name: "💵 دفعة مسددة", preis: -2065, von: "الإدارة" },
-                    "id_mvwrfyw5_w0ujv": { datum: "٣١ أكتوبر ٠٩:٥٤ م", name: "💵 دفعة مسددة", preis: -14940, von: "الإدارة" },
-                    "id_mvwukdb7_1ulja": { datum: "٣١ أكتوبر ١١:٢١ م", name: "💵 دفعة مسددة", preis: -2000, von: "الإدارة" },
-                    "id_mvwuplyt_ut5wk": { datum: "٣١ أكتوبر ١١:٢٦ م", name: "💵 دفعة مسددة", preis: -44670, von: "الإدارة" },
-                    "id_mvwuydb8_bxz20": { datum: "٣١ أكتوبر ١١:٣٢ م", name: "💵 دفعة مسددة", preis: -185745, von: "الإدارة" },
-                    "sheet_row_1": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 1)", preis: 59165, von: "الدفتر الورقي" },
-                    "sheet_row_16": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 16)", preis: 126580, von: "الدفتر الورقي" },
-                    "sheet_row_17": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 17)", preis: 44670, von: "الدفتر الورقي" },
-                    "sheet_row_3": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 3)", preis: 14940, von: "الدفتر الورقي" },
-                    "sheet_row_7": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 7)", preis: 900, von: "الدفتر الورقي" },
-                    "id_mvwvytw7_27qed": { name: "➕ قيد دين إضافي", preis: 3800, datum: "١ نوفمبر ١٢:٠١ ص", von: "الإدارة" }
-                },
-                "بشار العايد": {
-                    "id_mvww3a3j_unwsa": { name: "➕ قيد دين إضافي", preis: 2000, datum: "١ نوفمبر ١٢:٠٤ ص", von: "الإدارة" }
-                },
-                "ياسر البمانع": {
-                    "id_mvwgpeje_03pxg": { datum: "٣١ أكتوبر ٠٤:٥٣ م", name: "➕ قيد دين إضافي", preis: 3165, von: "الإدارة" },
-                    "id_mvwgre3h_f65ks": { datum: "٣١ أكتوبر ٠٤:٥٥ م", name: "💵 دفعة مسددة", preis: -2065, von: "الإدارة" },
-                    "id_mvwrfyw5_w0ujv": { datum: "٣١ أكتوبر ٠٩:٥٤ م", name: "💵 دفعة مسددة", preis: -14940, von: "الإدارة" },
-                    "id_mvwukdb7_1ulja": { datum: "٣١ أكتوبر ١١:٢١ م", name: "💵 دفعة مسددة", preis: -2000, von: "الإدارة" },
-                    "id_mvwuplyt_ut5wk": { datum: "٣١ أكتوبر ١١:٢٦ م", name: "💵 دفعة مسددة", preis: -44670, von: "الإدارة" },
-                    "id_mvwuydb8_bxz20": { datum: "٣١ أكتوبر ١١:٣٢ م", name: "💵 دفعة مسددة", preis: -185745, von: "الإدارة" },
-                    "sheet_row_1": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 1)", preis: 59165, von: "الدفتر الورقي" },
-                    "sheet_row_16": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 16)", preis: 126580, von: "الدفتر الورقي" },
-                    "sheet_row_17": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 17)", preis: 44670, von: "الدفتر الورقي" },
-                    "sheet_row_3": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 3)", preis: 14940, von: "الدفتر الورقي" },
-                    "sheet_row_7": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 7)", preis: 900, von: "الدفتر الورقي" },
-                    "id_mvwwas4z_y18or": { name: "➕ قيد دين إضافي", preis: 8335, datum: "١ نوفمبر ١٢:١٠ ص", von: "الإدارة" }
-                },
-                "عامر الحمو": {
-                    "id_mvxrs3n9_0uez6": { name: "➕ قيد دين إضافي", preis: 1400, datum: "١ نوفمبر ٠٢:٥١ م", von: "الإدارة" }
-                },
-                "عبد السواس": {
-                    "id_mvxrsyn7_en4tf": { name: "➕ قيد دين إضافي", preis: 6195, datum: "١ نوفمبر ٠٢:٥٢ م", von: "الإدارة" }
-                },
-                "محمود هنداوي": {
-                    "id_mvxruw1n_p1uu2": { name: "➕ قيد دين إضافي", preis: 800, datum: "١ نوفمبر ٠٢:٥٣ م", von: "الإدارة" }
-                },
-                "محمد الركة": {
-                    "id_mvxrx5eb_ttb8x": { name: "➕ قيد دين إضافي", preis: 32555, datum: "١ نوفمبر ٠٢:٥٥ م", von: "الإدارة" }
-                },
-                "محمد الطيف": {
-                    "id_mvwgpeje_03pxg": { datum: "٣١ أكتوبر ٠٤:٥٣ م", name: "➕ قيد دين إضافي", preis: 3165, von: "الإدارة" },
-                    "id_mvwgre3h_f65ks": { datum: "٣١ أكتوبر ٠٤:٥٥ م", name: "💵 دفعة مسددة", preis: -2065, von: "الإدارة" },
-                    "id_mvwrfyw5_w0ujv": { datum: "٣١ أكتوبر ٠٩:٥٤ م", name: "💵 دفعة مسددة", preis: -14940, von: "الإدارة" },
-                    "id_mvwukdb7_1ulja": { datum: "٣١ أكتوبر ١١:٢١ م", name: "💵 دفعة مسددة", preis: -2000, von: "الإدارة" },
-                    "id_mvwuplyt_ut5wk": { datum: "٣١ أكتوبر ١١:٢٦ م", name: "💵 دفعة مسددة", preis: -44670, von: "الإدارة" },
-                    "id_mvwuydb8_bxz20": { datum: "٣١ أكتوبر ١١:٣٢ م", name: "💵 دفعة مسددة", preis: -185745, von: "الإدارة" },
-                    "sheet_row_1": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 1)", preis: 59165, von: "الدفتر الورقي" },
-                    "sheet_row_16": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 16)", preis: 126580, von: "الدفتر الورقي" },
-                    "sheet_row_17": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 17)", preis: 44670, von: "الدفتر الورقي" },
-                    "sheet_row_3": { datum: "٣١ أكتوبر ٠٩:٣٤ م", name: "رصيد كشف حساب (رقم 3)", preis: 14940, von: "الدفتر الورقي" },
-                    "sheet_row_7": { datum: "٣١ أكتوبر ١٠:٣١ ص", name: "رصيد كشف حساب (رقم 7)", preis: 900, von: "الدفتر الورقي" },
-                    "id_mvxrykgt_su444": { name: "➕ قيد دين إضافي", preis: 695, datum: "١ نوفمبر ٠٢:٥٦ م", von: "الإدارة" }
-                },
-                "سامي الصالح": {
-                    "id_mvxs0r8b_uz9ll": { name: "➕ قيد دين إضافي", preis: 2750, datum: "١ نوفمبر ٠٢:٥٨ م", von: "الإدارة" }
-                },
-                "صالح ابو عمر": {
-                    "id_mvxs2mms_klf3l": { name: "➕ قيد دين إضافي", preis: 12230, datum: "١ نوفمبر ٠٢:٥٩ م", von: "الإدارة" }
-                },
-                "ايمن العيد": {
-                    "id_mvxs4y6p_96hdp": { name: "➕ قيد دين إضافي", preis: 5195, datum: "١ نوفمبر ٠٣:٠١ م", von: "الإدارة" }
-                },
-                "عمران": {
-                    "id_mvxs736h_lomb0": { name: "➕ قيد دين إضافي", preis: 9705, datum: "١ نوفمبر ٠٣:٠٣ م", von: "الإدارة" }
-                },
-                "احمد العواد": {
-                    "id_mvxs8sa5_d6zue": { name: "➕ قيد دين إضافي", preis: 14150, datum: "١ نوفمبر ٠٣:٠٤ م", von: "الإدارة" }
-                },
-                "سومر ابو اليث": {
-                    "id_mvxsa53g_z5f0o": { name: "➕ قيد دين إضافي", preis: 8720, datum: "١ نوفمبر ٠٣:٠٥ م", von: "الإدارة" }
-                },
-                "ياسر...": {
-                    "id_mvxsbuwg_46b0p": { name: "➕ قيد دين إضافي", preis: 8335, datum: "١ نوفمبر ٠٣:٠٧ م", von: "الإدارة" }
-                },
-                "عدنان ابو صدام": {
-                    "id_mvxsggzh_vo6u0": { name: "➕ قيد دين إضافي", preis: 11255, datum: "١ نوفمبر ٠٣:١٠ م", von: "الإدارة" }
-                },
-                "العايد": {
-                    "id_mvxsk7us_6x4ca": { name: "➕ قيد دين إضافي", preis: 1895, datum: "١ نوفمبر ٠٣:١٣ م", von: "الإدارة" }
-                }
-            },
-            shopInfo: {
-                name: "سوبر ماركت الاصلي - Alasly",
-                address: "ORUÇ REIS MAH 590.SK No:54",
-                phone: "",
-                printerWidth: "58mm"
-            },
-            sheetSeededV1: true
-        };
+        const INITIAL_SHEET_ENTRIES = [];
+        const INITIAL_PRODUCTS = [];
+        const LATEST_INTEGRATED_BACKUP = {};
 
         let store = {
             produkte: [],       // [{ id, name, preis, cost, barcode, updatedAt }]
@@ -4828,29 +4443,114 @@
             });
         };
 
+        // Import is additive: a conflict aborts the complete operation.
+        // Existing financial entries, settings and deletion markers remain authoritative.
+        function prepareBackupImport(current, imported) {
+            const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+            function validateKeys(value, depth = 0) {
+                if (depth > 40) throw new Error('Backup nesting too deep');
+                if (!value || typeof value !== 'object') return;
+                for (const key of Object.keys(value)) {
+                    if (['__proto__', 'prototype', 'constructor'].includes(key)) {
+                        throw new Error('Unsafe backup key');
+                    }
+                    validateKeys(value[key], depth + 1);
+                }
+            }
+            validateKeys(imported);
+            if (!isObject(imported)) throw new Error('Invalid backup');
+            for (const key of ['produkte', 'kunden', 'einkaeufe', 'invoices']) {
+                if (!Array.isArray(imported[key])) throw new Error('Expected native app backup');
+            }
+            for (const key of ['buchungen', 'merchantsMeta']) {
+                if (!isObject(imported[key])) throw new Error('Invalid backup collection');
+            }
+            // Do not execute deletions or account resets from an uploaded file.
+            for (const key of ['deletedIds', 'clearedAt']) {
+                if (imported[key] && (!isObject(imported[key]) || Object.keys(imported[key]).length)) {
+                    throw new Error('Deletion markers require manual reconciliation');
+                }
+            }
+            const next = JSON.parse(JSON.stringify(current));
+            const canonical = value => {
+                if (Array.isArray(value)) return value.map(canonical);
+                if (!isObject(value)) return value;
+                return Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])]));
+            };
+            const equal = (a, b) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+            const conflict = () => { throw new Error('Backup conflicts with existing data'); };
+            for (const [key, prefix] of [['produkte', 'prod_'], ['invoices', 'inv_'], ['einkaeufe', 'ek_']]) {
+                for (const item of imported[key]) {
+                    if (!isObject(item) || typeof item.id !== 'string' || !item.id) conflict();
+                    if (next.deletedIds[prefix + item.id]) conflict();
+                    const existing = next[key].find(x => x.id === item.id || (key === 'produkte' && x.name === item.name));
+                    if (existing) { if (!equal(existing, item)) conflict(); }
+                    else next[key].push(JSON.parse(JSON.stringify(item)));
+                }
+            }
+            for (const name of imported.kunden) {
+                if (typeof name !== 'string' || !name || ['__proto__', 'prototype', 'constructor'].includes(name)) conflict();
+                if (next.deletedIds['cust_' + name]) conflict();
+                if (!next.kunden.includes(name)) next.kunden.push(name);
+            }
+            for (const [name, meta] of Object.entries(imported.merchantsMeta)) {
+                if (!next.kunden.includes(name) || !isObject(meta)) conflict();
+                if (Object.hasOwn(next.merchantsMeta, name)) {
+                    if (!equal(next.merchantsMeta[name], meta)) conflict();
+                } else next.merchantsMeta[name] = JSON.parse(JSON.stringify(meta));
+            }
+            for (const [name, entries] of Object.entries(imported.buchungen)) {
+                if (!next.kunden.includes(name) || !isObject(entries)) conflict();
+                if (!Object.hasOwn(next.buchungen, name)) next.buchungen[name] = {};
+                for (const [id, entry] of Object.entries(entries)) {
+                    if (!isObject(entry) || !Number.isFinite(Number(entry.preis))) conflict();
+                    if (next.deletedIds['entry_' + id] || next.clearedAt[name]) conflict();
+                    if (Object.hasOwn(next.buchungen[name], id)) {
+                        if (!equal(next.buchungen[name][id], entry)) conflict();
+                    } else next.buchungen[name][id] = JSON.parse(JSON.stringify(entry));
+                }
+            }
+            return next;
+        }
+
         window.importBackup = function(event) {
             const file = event.target.files && event.target.files[0];
+            event.target.value = '';
             if (!file) return;
+            if (file.size > 10 * 1024 * 1024) {
+                showToast("حجم الملف أكبر من الحد المسموح (10 MB)", "error");
+                return;
+            }
             requireAuth(() => {
                 const reader = new FileReader();
+                reader.onerror = () => showToast("تعذر قراءة الملف؛ لم يتم تغيير البيانات", "error");
                 reader.onload = function(e) {
                     try {
                         const imported = JSON.parse(e.target.result);
-                        const parsed = parseCloudData(imported);
-                        if (parsed) {
-                            store = parsed;
-                            saveStore();
-                            showToast("تمت استعادة النسخة الاحتياطية بنجاح ✅");
-                        } else {
-                            showToast("ملف غير صالح!", "error");
-                        }
+                        prepareBackupImport(store, imported);
+                        openConfirmModal("استيراد آمن", "إضافة السجلات الجديدة فقط. عند وجود تعارض لن يتم تغيير البيانات. هل تريد المتابعة؟", () => {
+                            try {
+                                // Revalidate against the latest store after the confirmation delay.
+                                const next = prepareBackupImport(store, imported);
+                                const checkpointKey = STORAGE_KEY + '_before_import_' + Date.now();
+                                const checkpoint = JSON.stringify(store);
+                                localStorage.setItem(checkpointKey, checkpoint);
+                                if (localStorage.getItem(checkpointKey) !== checkpoint) throw new Error('Backup failed');
+                                // Persist the candidate before replacing the in-memory store.
+                                localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+                                store = next;
+                                saveStore();
+                                showToast("تمت إضافة السجلات الجديدة وحفظ نسخة محلية قبل الاستيراد ✅");
+                            } catch (err) {
+                                showToast("تعذر الاستيراد: تعارض أو مشكلة في التخزين. لم يتم استبدال السجلات", "error");
+                            }
+                        });
                     } catch (err) {
-                        showToast("خطأ في قراءة الملف!", "error");
+                        showToast("ملف غير صالح أو يحتوي على تعارض أو حذف. لم يتم تغيير البيانات", "error");
                     }
                 };
                 reader.readAsText(file);
             });
-            event.target.value = '';
         };
 
         // ==========================================================
@@ -5275,6 +4975,9 @@
         };
 
         window.runAutomatedSelfTest = function(showSuccessToast = false) {
+            const liveStore = store;
+            store = JSON.parse(JSON.stringify(liveStore));
+            try {
             const results = [];
 
             // Test 1: Alle 18 Einträge vom handgeschriebenen Blatt vorhanden?
@@ -5382,9 +5085,12 @@
             }
 
             if (showSuccessToast) {
-                showToast("تم اجتياز جميع اختبارات النظام (6/6) بنجاح ✅");
+                showToast(allPassed ? "اكتملت اختبارات الوظائف بنجاح ✅" : "توجد اختبارات غير ناجحة", allPassed ? 'success' : 'error');
             }
             return allPassed;
+            } finally {
+                store = liveStore;
+            }
         };
 
         // ==========================================================
@@ -5392,6 +5098,24 @@
         // ==========================================================
         // 12. SOFORT-START & HINTERGRUND-CLOUD-VERBINDUNG (IMMER AKTUELL)
         // ==========================================================
+        try {
+            const checkpointKey = STORAGE_KEY + '_before_safety_update_1';
+            if (localStorage.getItem(checkpointKey) === null) {
+                const originals = {};
+                for (const key of new Set([STORAGE_KEY, VERSION_HISTORY_KEY, ...LEGACY_KEYS])) {
+                    const raw = localStorage.getItem(key);
+                    if (raw !== null) originals[key] = raw;
+                }
+                const serialized = JSON.stringify({ capturedAt: new Date().toISOString(), storage: originals });
+                localStorage.setItem(checkpointKey, serialized);
+                if (localStorage.getItem(checkpointKey) !== serialized) throw new Error('Checkpoint failed');
+            }
+        } catch (error) {
+            hideLoadingScreen();
+            document.body.textContent = 'تعذر حفظ نسخة حماية محلية. تم إيقاف التطبيق دون تغيير البيانات. لا تمسح بيانات المتصفح؛ حرر مساحة تخزين ثم أعد المحاولة.';
+            throw error;
+        }
+        async function startAuthorizedApp() {
         loadFromLocal();
         updateUI();
         window.runAutomatedSelfTest(false);
@@ -5438,7 +5162,7 @@
                     if (!store.sheetSeededV1 && store.kunden.length === 0) {
                         seedSheetEntries(false);
                     }
-                    set(ref(db, '/'), serializeForCloud(store)).catch(() => {});
+                    // Empty cloud databases require administrator-controlled recovery.
                     updateUI();
                 }
             }, (error) => {
@@ -5468,6 +5192,50 @@
             hideLoadingScreen();
             setConnectionStatus('local');
         }
+        }
+        const authApp = initializeApp({
+                apiKey: "AIzaSyCJEt3LyN-xsZ7i8hEIBkqNL4sj5t9O9nw",
+                authDomain: "alasly-supermarkt.firebaseapp.com",
+                projectId: "alasly-supermarkt",
+                storageBucket: "alasly-supermarkt.firebasestorage.app",
+                messagingSenderId: "305763060284",
+                appId: "1:305763060284:web:499e52a19edbebe8a39139",
+                measurementId: "G-X0YMKCS5S2",
+                databaseURL: "https://alasly-supermarkt-default-rtdb.europe-west1.firebasedatabase.app"
+            });
+        const auth = getAuth(authApp);
+        document.getElementById('secure-login-form').addEventListener('submit', async event => {
+            event.preventDefault();
+            const password = document.getElementById('secure-password');
+            try {
+                await signInWithEmailAndPassword(auth, document.getElementById('secure-email').value.trim(), password.value);
+            } catch (error) {
+                document.getElementById('secure-login-status').textContent = 'تعذر تسجيل الدخول. تحقق من بيانات الحساب وتفعيل الدخول في Firebase.';
+            } finally { password.value = ''; }
+        });
+        let authorizedStarted = false;
+        onAuthStateChanged(auth, async user => {
+            if (!user) {
+                if (authorizedStarted) location.reload();
+                return;
+            }
+            try {
+                const token = await getIdTokenResult(user, true);
+                if (token.claims.supermarketStaff !== true) {
+                    document.getElementById('secure-login-status').textContent = 'هذا الحساب غير مصرح له بالدخول. تواصل مع المسؤول.';
+                    await signOut(auth);
+                    return;
+                }
+                if (authorizedStarted) return;
+                authorizedStarted = true;
+                await startAuthorizedApp();
+                document.body.classList.add('staff-authorized');
+                document.getElementById('secure-login').remove();
+            } catch (error) {
+                document.getElementById('secure-login-status').textContent = 'تعذر التحقق من صلاحية الدخول.';
+            }
+        });
+        hideLoadingScreen();
     </script>
 </body>
 </html>
